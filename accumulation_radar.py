@@ -19,9 +19,16 @@ import os
 import sys
 import time
 import requests
-import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    USE_PG = True
+except ImportError:
+    import sqlite3
+    USE_PG = False
 
 # === 加载 .env ===
 env_file = Path(__file__).parent / ".env.oi"
@@ -71,35 +78,66 @@ def api_get(endpoint, params=None):
 
 
 def init_db():
-    """初始化数据库"""
-    conn = sqlite3.connect(str(DB_PATH))
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS watchlist (
-        symbol TEXT PRIMARY KEY,
-        coin TEXT,
-        added_date TEXT,
-        sideways_days INT,
-        range_pct REAL,
-        avg_vol REAL,
-        low_price REAL,
-        high_price REAL,
-        current_price REAL,
-        score REAL,
-        status TEXT DEFAULT 'watching',
-        last_oi_alert TEXT,
-        notes TEXT
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS alerts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        symbol TEXT,
-        alert_type TEXT,
-        alert_time TEXT,
-        price REAL,
-        oi_delta_pct REAL,
-        vol_ratio REAL,
-        details TEXT
-    )""")
-    conn.commit()
+    """初始化数据库（PostgreSQL 或 SQLite）"""
+    if USE_PG:
+        db_url = os.getenv("DATABASE_URL")
+        conn = psycopg2.connect(db_url)
+        c = conn.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS watchlist (
+            symbol TEXT PRIMARY KEY,
+            coin TEXT,
+            added_date TEXT,
+            sideways_days INT,
+            range_pct REAL,
+            avg_vol REAL,
+            low_price REAL,
+            high_price REAL,
+            current_price REAL,
+            score REAL,
+            status TEXT DEFAULT 'watching',
+            last_oi_alert TEXT,
+            notes TEXT
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS alerts (
+            id SERIAL PRIMARY KEY,
+            symbol TEXT,
+            alert_type TEXT,
+            alert_time TEXT,
+            price REAL,
+            oi_delta_pct REAL,
+            vol_ratio REAL,
+            details TEXT
+        )""")
+        conn.commit()
+    else:
+        conn = sqlite3.connect(str(DB_PATH))
+        c = conn.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS watchlist (
+            symbol TEXT PRIMARY KEY,
+            coin TEXT,
+            added_date TEXT,
+            sideways_days INT,
+            range_pct REAL,
+            avg_vol REAL,
+            low_price REAL,
+            high_price REAL,
+            current_price REAL,
+            score REAL,
+            status TEXT DEFAULT 'watching',
+            last_oi_alert TEXT,
+            notes TEXT
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            alert_type TEXT,
+            alert_time TEXT,
+            price REAL,
+            oi_delta_pct REAL,
+            vol_ratio REAL,
+            details TEXT
+        )""")
+        conn.commit()
     return conn
 
 
@@ -484,16 +522,31 @@ def save_watchlist(conn, results):
     """保存标的池到数据库"""
     c = conn.cursor()
     now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
-    
+
     for r in results:
-        c.execute("""INSERT OR REPLACE INTO watchlist 
-            (symbol, coin, added_date, sideways_days, range_pct, avg_vol, 
-             low_price, high_price, current_price, score, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (r["symbol"], r["coin"], now, r["sideways_days"], r["range_pct"],
-             r["avg_vol"], r["low_price"], r["high_price"], r["current_price"],
-             r["score"], r["status"]))
-    
+        if USE_PG:
+            c.execute("""INSERT INTO watchlist
+                (symbol, coin, added_date, sideways_days, range_pct, avg_vol,
+                 low_price, high_price, current_price, score, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (symbol) DO UPDATE SET
+                    coin=EXCLUDED.coin, added_date=EXCLUDED.added_date,
+                    sideways_days=EXCLUDED.sideways_days, range_pct=EXCLUDED.range_pct,
+                    avg_vol=EXCLUDED.avg_vol, low_price=EXCLUDED.low_price,
+                    high_price=EXCLUDED.high_price, current_price=EXCLUDED.current_price,
+                    score=EXCLUDED.score, status=EXCLUDED.status""",
+                (r["symbol"], r["coin"], now, r["sideways_days"], r["range_pct"],
+                 r["avg_vol"], r["low_price"], r["high_price"], r["current_price"],
+                 r["score"], r["status"]))
+        else:
+            c.execute("""INSERT OR REPLACE INTO watchlist
+                (symbol, coin, added_date, sideways_days, range_pct, avg_vol,
+                 low_price, high_price, current_price, score, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (r["symbol"], r["coin"], now, r["sideways_days"], r["range_pct"],
+                 r["avg_vol"], r["low_price"], r["high_price"], r["current_price"],
+                 r["score"], r["status"]))
+
     conn.commit()
     print(f"  💾 保存 {len(results)} 个标的到数据库")
 
