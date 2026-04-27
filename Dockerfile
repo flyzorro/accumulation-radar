@@ -5,6 +5,7 @@ COPY . .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-ENV TG_BOT_TOKEN="" TG_CHAT_ID=""
+ENV MODE=full
+ENV PYTHONUNBUFFERED=1
 
-CMD ["python3", "accumulation_radar.py", "full"]
+CMD ["sh", "-c", "python3 accumulation_radar.py ${MODE}"]
